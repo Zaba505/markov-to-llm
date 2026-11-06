@@ -6,6 +6,7 @@ import (
 	"reflect"
 	"slices"
 	"strings"
+	"sync"
 	"testing"
 
 	"github.com/Zaba505/markov-to-llm/markov"
@@ -247,11 +248,78 @@ func TestBuild_shortens_long_labels(t *testing.T) {
 }
 
 func TestPercent(t *testing.T) {
-	for p, want := range map[float64]string{0: "0%", 0.001: "<1%", 0.01: "1%", 0.426: "43%", 1: "100%"} {
+	for p, want := range map[float64]string{0: "0%", 0.001: "<1%", 0.01: "1%", 0.426: "43%", 0.99: "99%", 0.996: ">99%", 1: "100%"} {
 		if got := Percent(p); got != want {
 			t.Errorf("Percent(%v) = %q, want %q", p, got, want)
 		}
 	}
+}
+
+func TestBuilder_builds_what_Build_builds(t *testing.T) {
+	c := markov.Build(markov.Tokenize(text))
+	b := NewBuilder(c)
+
+	// Twice each, so that the second comes from what the first left behind, and
+	// in an order where a selection could disturb what the next one finds.
+	for range 2 {
+		for _, selected := range []string{"", "quick", "the", "missing", "barks"} {
+			if got, want := b.Build(5, selected), Build(c, 5, selected); !reflect.DeepEqual(got, want) {
+				t.Errorf("selected %q: the Builder's picture differs from Build's", selected)
+			}
+		}
+	}
+}
+
+func TestBuilder_lays_out_the_same_nodes_once(t *testing.T) {
+	c := markov.Build(markov.Tokenize(text))
+	b := NewBuilder(c)
+
+	all := c.Vocabulary()
+	b.Build(all, "")
+	b.Build(all, "the")
+	b.Build(all, "quick")
+	b.Build(all+50, "the")
+	if got := len(b.layouts); got != 1 {
+		t.Errorf("%d layouts for one set of nodes", got)
+	}
+
+	b.Build(3, "")
+	b.Build(3, "quick")
+	if got := len(b.layouts); got != 3 {
+		t.Errorf("%d layouts, want one more for each new set of nodes", got)
+	}
+}
+
+func TestBuilder_forgets_layouts_when_it_is_full(t *testing.T) {
+	var s strings.Builder
+	for i := range maxLayouts + 10 {
+		fmt.Fprintf(&s, "word%d.\n", i)
+	}
+	c := markov.Build(markov.Tokenize(s.String()))
+	b := NewBuilder(c)
+
+	for i := range maxLayouts + 10 {
+		b.Build(1, fmt.Sprintf("word%d", i))
+		if got := len(b.layouts); got > maxLayouts {
+			t.Fatalf("%d layouts, want at most %d", got, maxLayouts)
+		}
+	}
+}
+
+func TestBuilder_can_be_shared(t *testing.T) {
+	c := markov.Build(markov.Tokenize(text))
+	b := NewBuilder(c)
+	want := Build(c, 5, "the")
+
+	var wg sync.WaitGroup
+	for range 8 {
+		wg.Go(func() {
+			if got := b.Build(5, "the"); !reflect.DeepEqual(got, want) {
+				t.Error("a shared Builder's picture differs from Build's")
+			}
+		})
+	}
+	wg.Wait()
 }
 
 func tokensOf(g Graph) []string {

@@ -88,6 +88,18 @@ func TestPreviewOf(t *testing.T) {
 	}
 }
 
+func TestCountOf(t *testing.T) {
+	require.Equal(t, "0 times", countOf(0, "time"))
+	require.Equal(t, "1 time", countOf(1, "time"))
+	require.Equal(t, "2 times", countOf(2, "time"))
+	require.Equal(t, "1 less likely token", countOf(1, "less likely token"))
+}
+
+func TestRunURL(t *testing.T) {
+	require.Equal(t, "/runs/ab/sentences", runURL(sentencesPath, "ab"))
+	require.Equal(t, "/runs/ab/tokens", runURL(tokensPath, "ab"))
+}
+
 func TestChainURL(t *testing.T) {
 	require.Equal(t, "/runs/ab/chain", chainURL("ab", ""))
 	require.Equal(t, "/runs/ab/chain?token=don%27t", chainURL("ab", "don't"))

@@ -44,16 +44,18 @@ TLS_PEM_FILE=tls.pem go run .
 ## What it does
 
 - **Tokens** are lowercase words, the punctuation marks `, ; :`, and sentence
-  terminators (runs of `. ! ?`). Other symbols are dropped. A sentence ends at a
-  terminator or a blank line, so an abbreviation like `Mr.` ends one too.
+  terminators (runs of `. ! ?`). Other symbols are dropped, and so are words of
+  more than 256 characters, which are data rather than words. A sentence ends at
+  a terminator or a blank line, so an abbreviation like `Mr.` ends one too.
 - **The chain** is first order: the next token depends only on the current
   token. Each sentence's last token moves to an explicit end-of-sentence state,
   much like the end-of-sequence token of an LLM.
 - **The graph** shows the most frequent tokens (10 to 100, adjustable), with up
   to 5 arrows out of each. Select any token, by clicking it or searching for it,
-  to see the full odds of what comes next.
+  to see the full odds of what comes next. Punctuation can be selected in the
+  graph for its odds too, but a sentence can only start from a word.
 - **Generating** samples each next token by its probability until the walk
-  reaches the end-of-sentence state or 60 tokens. Each sentence can expand to
+  reaches the end-of-sentence state or would go past 60 tokens. Each sentence can expand to
   show the distribution behind each step.
 
 Refreshing the page clears it. The page is the history: the server only keeps

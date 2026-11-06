@@ -36,8 +36,10 @@ const (
 
 	previewRunes = 600
 
-	maxTokenBytes = 4096
-	maxQueryBytes = 64
+	// maxQueryRunes is the longest search, in characters.
+	maxQueryRunes = 64
+
+	runIDName = "runId"
 )
 
 //go:embed templates/*.html
@@ -57,7 +59,7 @@ var (
 
 // The API's parameters.
 var (
-	runIDParam = openapi.PathParam[string]("runId").
+	runIDParam = openapi.PathParam[string](runIDName).
 			Description("The run, as the page was given it when its corpus was uploaded.").
 			Pattern(regexp.MustCompile(`^[0-9a-f]{16}$`))
 
@@ -69,17 +71,17 @@ var (
 
 	tokenParam = openapi.QueryParam[string]("token").
 			Description("The token to select. A corpus's token, or empty for none.").
-			MaxLength(maxTokenBytes)
+			MaxLength(markov.MaxTokenRunes)
 
 	queryParam = openapi.QueryParam[string]("q").
 			Description("The start of the tokens to find.").
-			MaxLength(maxQueryBytes)
+			MaxLength(maxQueryRunes)
 )
 
 // InvalidCorpus answers an upload that has nothing to build a chain from.
 type InvalidCorpus struct{ problem.Details }
 
-// InvalidToken answers a token that can't be selected or start a sentence.
+// InvalidToken answers a token that can't be selected, or can't start a sentence.
 type InvalidToken struct{ problem.Details }
 
 // RunNotFound answers a run the server doesn't have, or no longer has.
@@ -103,6 +105,7 @@ func New(s *humus.Setup) (http.Handler, error) {
 func parseTemplates() (*template.Template, error) {
 	templates, err := template.New("").Funcs(template.FuncMap{
 		"percent": graph.Percent,
+		"count":   countOf,
 		"coord":   func(v float64) string { return fmt.Sprintf("%.1f", v) },
 	}).ParseFS(templateFiles, "templates/*.html")
 	if err != nil {
@@ -169,11 +172,15 @@ func newHandler(s *humus.Setup, templates *template.Template) (http.Handler, err
 	mux := http.NewServeMux()
 	mux.Handle("GET /static/", http.FileServerFS(staticFiles))
 	mux.Handle("/", http.MaxBytesHandler(service, maxRequestBytes))
-	return mux, nil
+
+	// Every other site the browser has open can send forms here too.
+	crossOrigin := http.NewCrossOriginProtection()
+	crossOrigin.SetDenyHandler(problem.Handler(http.StatusForbidden, notice))
+	return crossOrigin.Handler(mux), nil
 }
 
 func (a *api) getPage(context.Context, openapi.Request[openapi.EmptyBody]) (pageView, error) {
-	return pageView{MaxUploadMB: maxUploadMB}, nil
+	return pageView{MaxUploadMB: maxUploadMB, RunsURL: runsPath.String()}, nil
 }
 
 func (a *api) createRun(_ context.Context, req openapi.Request[upload]) (runView, error) {
@@ -188,7 +195,7 @@ func (a *api) createRun(_ context.Context, req openapi.Request[upload]) (runView
 	}
 
 	preview, isPart := previewOf(text)
-	r := &run{name: u.Name, preview: preview, previewIsPart: isPart, chain: chain}
+	r := &run{name: u.Name, preview: preview, previewIsPart: isPart, chain: chain, graph: graph.NewBuilder(chain)}
 	a.runs.add(r)
 	return newRunView(r), nil
 }
@@ -199,8 +206,8 @@ func (a *api) getChain(_ context.Context, req openapi.Request[openapi.EmptyBody]
 		return chainView{}, err
 	}
 	token := openapi.ParamFrom(req, tokenParam)
-	if token != "" && !r.chain.CanStart(token) {
-		return chainView{}, invalidToken(token)
+	if token != "" && !r.chain.CanContinue(token) {
+		return chainView{}, unselectableToken(token)
 	}
 	return newChainView(r, openapi.ParamFrom(req, limitParam), token), nil
 }
@@ -222,7 +229,7 @@ func (a *api) createSentence(_ context.Context, req openapi.Request[sentenceForm
 	rng := rand.New(rand.NewPCG(rand.Uint64(), rand.Uint64()))
 	s, err := r.chain.Generate(token, rng, maxSentenceTokens)
 	if err != nil {
-		return sentenceView{}, invalidToken(token)
+		return sentenceView{}, invalidStart(token)
 	}
 	return newSentenceView(s, maxSentenceTokens), nil
 }
@@ -247,11 +254,19 @@ func invalidCorpus(detail string) InvalidCorpus {
 	}}
 }
 
-func invalidToken(token string) InvalidToken {
+func unselectableToken(token string) InvalidToken {
+	return InvalidToken{problem.Details{
+		Title:  "That token can't be selected",
+		Status: http.StatusUnprocessableEntity,
+		Detail: fmt.Sprintf("%q isn't in the corpus, or it only ever ends a sentence.", token),
+	}}
+}
+
+func invalidStart(token string) InvalidToken {
 	return InvalidToken{problem.Details{
 		Title:  "That token can't start a sentence",
 		Status: http.StatusUnprocessableEntity,
-		Detail: fmt.Sprintf("%q isn't in the corpus, or it only ever ends a sentence.", token),
+		Detail: fmt.Sprintf("%q isn't in the corpus, or it's punctuation.", token),
 	}}
 }
 
@@ -286,6 +301,19 @@ func previewOf(text string) (string, bool) {
 		runes++
 	}
 	return strings.TrimSpace(text), false
+}
+
+// countOf is n and a noun, which is plural unless n is 1.
+func countOf(n int, noun string) string {
+	if n == 1 {
+		return "1 " + noun
+	}
+	return fmt.Sprintf("%d %ss", n, noun)
+}
+
+// runURL is the URL of path for a run. A run's ID needs no escaping.
+func runURL(path openapi.Path, runID string) string {
+	return strings.Replace(path.String(), "{"+runIDName+"}", runID, 1)
 }
 
 // formatWidth is a probability as a bar's width, in percent.

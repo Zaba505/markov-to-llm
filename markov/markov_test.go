@@ -79,6 +79,26 @@ func TestTokenize(t *testing.T) {
 			want: [][]string{{"über", "naïve", "日本語", "."}, {"ça", "va"}},
 		},
 		{
+			name: "drops a word that is too long",
+			text: "before " + strings.Repeat("x", MaxTokenRunes+1) + " after",
+			want: [][]string{{"before", "after"}},
+		},
+		{
+			name: "keeps a word of exactly the longest length",
+			text: strings.Repeat("é", MaxTokenRunes),
+			want: [][]string{{strings.Repeat("é", MaxTokenRunes)}},
+		},
+		{
+			name: "drops punctuation after a dropped word",
+			text: strings.Repeat("x", MaxTokenRunes+1) + ", after",
+			want: [][]string{{"after"}},
+		},
+		{
+			name: "cuts a run of terminators that is too long",
+			text: "wait" + strings.Repeat(".", MaxTokenRunes+1),
+			want: [][]string{{"wait", strings.Repeat(".", MaxTokenRunes)}},
+		},
+		{
 			name: "abbreviations end a sentence",
 			text: "Mr. Smith",
 			want: [][]string{{"mr", "."}, {"smith"}},
@@ -177,9 +197,18 @@ func TestBuild_skips_empty_sentences(t *testing.T) {
 
 func TestCanStart(t *testing.T) {
 	c := Build(Tokenize("Stop, now."))
-	for token, want := range map[string]bool{"stop": true, ",": true, "now": true, ".": false, "missing": false, "": false, EOS: false} {
+	for token, want := range map[string]bool{"stop": true, ",": false, "now": true, ".": false, "missing": false, "": false, EOS: false} {
 		if got := c.CanStart(token); got != want {
 			t.Errorf("CanStart(%q) = %v, want %v", token, got, want)
+		}
+	}
+}
+
+func TestCanContinue(t *testing.T) {
+	c := Build(Tokenize("Stop, now."))
+	for token, want := range map[string]bool{"stop": true, ",": true, "now": true, ".": false, "missing": false, "": false, EOS: false} {
+		if got := c.CanContinue(token); got != want {
+			t.Errorf("CanContinue(%q) = %v, want %v", token, got, want)
 		}
 	}
 }
@@ -206,9 +235,28 @@ func TestSearch(t *testing.T) {
 	}
 }
 
+func TestSearch_finds_only_words(t *testing.T) {
+	c := Build(Tokenize("One, two, three, four."))
+	if got, want := c.Search("", 10), []string{"four", "one", "three", "two"}; !slices.Equal(got, want) {
+		t.Errorf(`Search("", 10) = %q, want %q`, got, want)
+	}
+	if got := c.Search(",", 10); len(got) != 0 {
+		t.Errorf(`Search(",", 10) = %q, want nothing`, got)
+	}
+}
+
+func TestSearch_spells_a_prefix_as_tokens_are_spelled(t *testing.T) {
+	c := Build(Tokenize("Don’t stop."))
+	for _, prefix := range []string{"don'", "don’", "donʼ", "DON’T"} {
+		if got, want := c.Search(prefix, 10), []string{"don't"}; !slices.Equal(got, want) {
+			t.Errorf("Search(%q, 10) = %q, want %q", prefix, got, want)
+		}
+	}
+}
+
 func TestGenerate_rejects_a_token_that_cannot_start(t *testing.T) {
-	c := Build(Tokenize("Stop now."))
-	for _, start := range []string{"missing", ".", "", EOS} {
+	c := Build(Tokenize("Stop, now."))
+	for _, start := range []string{"missing", ".", ",", "", EOS} {
 		if _, err := c.Generate(start, testRNG(), 10); !errors.Is(err, ErrCannotStart) {
 			t.Errorf("Generate(%q) error = %v, want ErrCannotStart", start, err)
 		}
@@ -325,6 +373,42 @@ func TestGenerate_stops_at_the_length_limit(t *testing.T) {
 	}
 	if !s.Truncated {
 		t.Error("Truncated = false, want true for a walk that hadn't ended")
+	}
+}
+
+func TestGenerate_does_not_truncate_a_sentence_that_ends_at_the_limit(t *testing.T) {
+	c := Build(Tokenize("a b c d e."))
+
+	s, err := c.Generate("a", testRNG(), 6)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if want := []string{"a", "b", "c", "d", "e", "."}; !slices.Equal(s.Tokens, want) {
+		t.Errorf("Tokens = %q, want %q", s.Tokens, want)
+	}
+	if s.Truncated {
+		t.Error("Truncated = true, want false for a sentence that ended")
+	}
+	if len(s.Steps) != 6 || chosenOf(t, s.Steps[5]) != EOS {
+		t.Errorf("Steps = %+v, want 6, the last choosing EOS", s.Steps)
+	}
+}
+
+func TestGenerate_truncates_with_no_step_for_a_token_it_did_not_add(t *testing.T) {
+	c := Build(Tokenize("a b c d e."))
+
+	s, err := c.Generate("a", testRNG(), 5)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if want := []string{"a", "b", "c", "d", "e"}; !slices.Equal(s.Tokens, want) {
+		t.Errorf("Tokens = %q, want %q", s.Tokens, want)
+	}
+	if !s.Truncated {
+		t.Error("Truncated = false, want true")
+	}
+	if len(s.Steps) != 4 {
+		t.Errorf("%d steps, want one for each token after the first", len(s.Steps))
 	}
 }
 

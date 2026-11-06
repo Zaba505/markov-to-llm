@@ -6,6 +6,7 @@ import (
 	"slices"
 	"sync"
 
+	"github.com/Zaba505/markov-to-llm/graph"
 	"github.com/Zaba505/markov-to-llm/markov"
 )
 
@@ -14,13 +15,14 @@ import (
 // recently used chain makes way for a new one.
 const maxRuns = 8
 
-// run is an uploaded corpus and its chain. It is read-only once made.
+// run is an uploaded corpus and its chain. Its fields are read-only once made.
 type run struct {
 	id            string
 	name          string
 	preview       string
 	previewIsPart bool
 	chain         *markov.Chain
+	graph         *graph.Builder
 }
 
 // runStore holds the most recently used runs.

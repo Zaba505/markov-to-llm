@@ -7,21 +7,36 @@ import (
 	"unicode"
 )
 
+// MaxTokenRunes is the most characters a token has. A selected token travels in
+// a URL, and is repeated in the page, so its length has to be bounded.
+const MaxTokenRunes = 256
+
+// apostrophes spells every apostrophe the same way.
+var apostrophes = strings.NewReplacer("’", "'", "ʼ", "'")
+
+// normalize spells text the way tokens are spelled: in lowercase, with straight
+// apostrophes.
+func normalize(text string) string {
+	return strings.ToLower(apostrophes.Replace(text))
+}
+
 // Tokenize splits text into sentences of lowercase tokens.
 //
 // A token is a word, a clause mark (one of , ; :), or a terminator (a run of
 // . ! ? or …). A word keeps its internal apostrophes and hyphens, as in don't
 // and well-known, and a number keeps its internal . and , as in 3.14. Other
 // symbols are dropped, since quotes and brackets that are sampled one at a
-// time don't come out balanced.
+// time don't come out balanced. A word of more than MaxTokenRunes characters is
+// a blob of data rather than a word, so it is dropped too, and a longer run of
+// terminators is cut to that length.
 //
 // A sentence ends at a terminator or a blank line. Punctuation with no words
 // before it in its sentence is dropped. An abbreviation such as "Mr." ends its
 // sentence, a limitation of telling sentences apart this simply.
 func Tokenize(text string) [][]string {
 	text = strings.TrimPrefix(text, "\uFEFF")
-	text = strings.NewReplacer("\r\n", "\n", "\r", "\n", "’", "'", "ʼ", "'").Replace(text)
-	runes := []rune(strings.ToLower(text))
+	text = strings.NewReplacer("\r\n", "\n", "\r", "\n").Replace(text)
+	runes := []rune(normalize(text))
 
 	var sentences [][]string
 	var current []string
@@ -37,7 +52,9 @@ func Tokenize(text string) [][]string {
 		switch {
 		case isWordRune(r):
 			end := wordEnd(runes, i)
-			current = append(current, string(runes[i:end]))
+			if end-i <= MaxTokenRunes {
+				current = append(current, string(runes[i:end]))
+			}
 			i = end
 		case isTerminatorRune(r):
 			end := i
@@ -45,7 +62,7 @@ func Tokenize(text string) [][]string {
 				end++
 			}
 			if len(current) > 0 {
-				current = append(current, string(runes[i:end]))
+				current = append(current, string(runes[i:min(end, i+MaxTokenRunes)]))
 				endSentence()
 			}
 			i = end

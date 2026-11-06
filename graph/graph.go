@@ -10,6 +10,9 @@ import (
 	"fmt"
 	"math"
 	"slices"
+	"strconv"
+	"strings"
+	"sync"
 
 	"github.com/Zaba505/markov-to-llm/markov"
 )
@@ -42,6 +45,10 @@ const (
 	collisionPadding  = 6.0
 	gravity           = 0.015
 	spacingMultiplier = 1.2
+
+	// maxLayouts is how many layouts a Builder remembers. Selecting a rare token
+	// adds nodes, so that a chain has about as many layouts as distinct tokens.
+	maxLayouts = 256
 )
 
 // Node is a token in the picture.
@@ -98,10 +105,14 @@ type Graph struct {
 	Selected string
 }
 
-// Percent formats a probability for people.
+// Percent formats a probability for people. Only a certainty is 100%, and only
+// an impossibility is 0%.
 func Percent(p float64) string {
-	if p > 0 && p < 0.01 {
+	switch {
+	case p > 0 && p < 0.01:
 		return "<1%"
+	case p > 0.99 && p < 1:
+		return ">99%"
 	}
 	return fmt.Sprintf("%.0f%%", p*100)
 }
@@ -111,7 +122,32 @@ func Percent(p float64) string {
 // their frequency. The same arguments always give the same picture, and
 // selected moves nothing unless it adds nodes.
 func Build(c *markov.Chain, limit int, selected string) Graph {
-	tokens := slices.Clone(c.Top(limit))
+	return NewBuilder(c).Build(limit, selected)
+}
+
+// point is where a node goes.
+type point struct{ x, y float64 }
+
+// Builder builds pictures of one chain, as Build does, and remembers their
+// layouts, which are by far the most expensive part of a picture and depend only
+// on which nodes it has. It is safe to use from several goroutines.
+type Builder struct {
+	chain *markov.Chain
+
+	mu      sync.Mutex
+	layouts map[string][]point
+}
+
+// NewBuilder returns a Builder for c.
+func NewBuilder(c *markov.Chain) *Builder {
+	return &Builder{chain: c, layouts: make(map[string][]point)}
+}
+
+// Build returns what Build returns for the Builder's chain.
+func (b *Builder) Build(limit int, selected string) Graph {
+	c := b.chain
+	top := c.Top(limit)
+	tokens := slices.Clone(top)
 	if c.Count(selected) == 0 {
 		selected = ""
 	}
@@ -135,7 +171,8 @@ func Build(c *markov.Chain, limit int, selected string) Graph {
 	g.Nodes = newNodes(c, tokens, selected)
 
 	links := newLinks(c, tokens, index)
-	layOut(g.Nodes, links, g.Width, g.Height)
+	key := strconv.Itoa(len(top)) + "\x00" + strings.Join(tokens[len(top):], "\x00")
+	b.place(key, g.Nodes, links, g.Width, g.Height)
 
 	for _, l := range links {
 		g.Edges = append(g.Edges, newEdge(g.Nodes, l, g.Width, g.Height))
@@ -144,6 +181,35 @@ func Build(c *markov.Chain, limit int, selected string) Graph {
 		highlight(&g, index)
 	}
 	return g
+}
+
+// place positions nodes, from the remembered layout for key if there is one. The
+// key identifies the nodes: how many of the most frequent tokens they start with,
+// and then the rest. Two goroutines can lay out the same nodes at once, which
+// only wastes time, since a layout depends only on its input.
+func (b *Builder) place(key string, nodes []Node, links []link, width, height float64) {
+	b.mu.Lock()
+	layout, ok := b.layouts[key]
+	b.mu.Unlock()
+	if ok {
+		for i, p := range layout {
+			nodes[i].X, nodes[i].Y = p.x, p.y
+		}
+		return
+	}
+
+	layOut(nodes, links, width, height)
+	layout = make([]point, len(nodes))
+	for i, node := range nodes {
+		layout[i] = point{x: node.X, y: node.Y}
+	}
+
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	if len(b.layouts) >= maxLayouts {
+		clear(b.layouts)
+	}
+	b.layouts[key] = layout
 }
 
 func heightFor(nodes int) float64 {

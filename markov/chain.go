@@ -114,23 +114,31 @@ func (c *Chain) Top(n int) []string {
 	return c.ranked[:min(max(n, 0), len(c.ranked))]
 }
 
-// CanStart reports whether a sentence can start from token: it is in the corpus
-// and isn't a terminator, which has nothing after it but the end.
-func (c *Chain) CanStart(token string) bool {
+// CanContinue reports whether a walk can continue from token: it is in the
+// corpus and isn't a terminator, which has nothing after it but the end.
+func (c *Chain) CanContinue(token string) bool {
 	_, ok := c.next[token]
 	return ok && !IsTerminator(token)
+}
+
+// CanStart reports whether a sentence can start from token: it is in the corpus
+// and is a word. Tokenize drops punctuation with no words before it, so no
+// sentence of a corpus starts with any, and neither does a generated one.
+func (c *Chain) CanStart(token string) bool {
+	_, ok := c.next[token]
+	return ok && !isPunctuation(token)
 }
 
 // Search returns up to n tokens that begin with prefix and can start a
 // sentence, most frequent first. An empty prefix matches every such token.
 func (c *Chain) Search(prefix string, n int) []string {
-	prefix = strings.ToLower(strings.TrimSpace(prefix))
+	prefix = normalize(strings.TrimSpace(prefix))
 	matches := make([]string, 0, min(max(n, 0), len(c.ranked)))
 	for _, token := range c.ranked {
 		if len(matches) == n {
 			break
 		}
-		if strings.HasPrefix(token, prefix) && !IsTerminator(token) {
+		if strings.HasPrefix(token, prefix) && !isPunctuation(token) {
 			matches = append(matches, token)
 		}
 	}

@@ -24,6 +24,7 @@ const (
 
 type pageView struct {
 	MaxUploadMB int64
+	RunsURL     string
 }
 
 type runView struct {
@@ -34,6 +35,9 @@ type runView struct {
 	Tokens        int
 	Vocabulary    int
 	Sentences     int
+	SentencesURL  string
+	TokensURL     string
+	MaxQuery      int
 	Chain         chainView
 	Selection     selectionView
 	Chips         chipsView
@@ -48,6 +52,9 @@ func newRunView(r *run) runView {
 		Tokens:        r.chain.Tokens(),
 		Vocabulary:    r.chain.Vocabulary(),
 		Sentences:     r.chain.Sentences(),
+		SentencesURL:  runURL(sentencesPath, r.id),
+		TokensURL:     runURL(tokensPath, r.id),
+		MaxQuery:      maxQueryRunes,
 		Chain:         newChainView(r, defaultLimit, ""),
 		Selection:     selectionView{RunID: r.id},
 		Chips:         newChipsView(r, ""),
@@ -65,6 +72,7 @@ type chainView struct {
 	ShowLimit  bool
 	SliderURL  string
 	Vocabulary int
+	MaxEdges   int
 
 	Width, Height float64
 	Nodes         []nodeView
@@ -97,7 +105,7 @@ type nextRow struct {
 }
 
 func newChainView(r *run, limit int, selected string) chainView {
-	g := graph.Build(r.chain, limit, selected)
+	g := r.graph.Build(limit, selected)
 	v := chainView{
 		RunID:      r.id,
 		Limit:      limit,
@@ -107,13 +115,15 @@ func newChainView(r *run, limit int, selected string) chainView {
 		ShowLimit:  r.chain.Vocabulary() > minLimit,
 		SliderURL:  chainURL(r.id, selected),
 		Vocabulary: r.chain.Vocabulary(),
+		MaxEdges:   graph.MaxEdgesPerNode,
 		Width:      g.Width,
 		Height:     g.Height,
 		Edges:      g.Edges,
 		Shown:      len(g.Nodes),
 		Selected:   g.Selected,
-		Selection:  selectionView{RunID: r.id, Token: g.Selected, OOB: true},
+		Selection:  newSelectionView(r, g.Selected),
 	}
+	v.Selection.OOB = true
 	for i, node := range g.Nodes {
 		nv := nodeView{Node: node, ID: i}
 		if !node.Terminal {
@@ -139,7 +149,7 @@ func newNextRow(r *run, t markov.Transition) nextRow {
 		Width:   formatWidth(t.Probability),
 		Count:   t.Count,
 	}
-	if r.chain.CanStart(t.Token) {
+	if r.chain.CanContinue(t.Token) {
 		row.URL = chainURL(r.id, t.Token)
 	}
 	return row
@@ -149,7 +159,7 @@ func newNextRow(r *run, t markov.Transition) nextRow {
 // repeated query parameter is rejected and every control that uses this URL
 // sends the slider's value along with it.
 func chainURL(runID, token string) string {
-	u := "/runs/" + runID + "/chain"
+	u := runURL(chainPath, runID)
 	if token == "" {
 		return u
 	}
@@ -159,10 +169,26 @@ func chainURL(runID, token string) string {
 // selectionView is the starting token and the button that generates from it.
 type selectionView struct {
 	RunID string
+
+	// Token is the starting token, if there is one.
 	Token string
+
+	// Unusable is a selected token that can't start a sentence. A clause mark
+	// can be selected for its odds, but it leaves nothing to generate from.
+	Unusable string
 
 	// OOB swaps the selection into place out of band.
 	OOB bool
+}
+
+func newSelectionView(r *run, selected string) selectionView {
+	v := selectionView{RunID: r.id}
+	if r.chain.CanStart(selected) {
+		v.Token = selected
+	} else {
+		v.Unusable = selected
+	}
+	return v
 }
 
 type chipsView struct {

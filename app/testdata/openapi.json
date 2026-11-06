@@ -121,7 +121,7 @@
             "description": "The token to select. A corpus's token, or empty for none.",
             "schema": {
               "type": "string",
-              "maxLength": 4096
+              "maxLength": 256
             }
           }
         ],

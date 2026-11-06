@@ -29,6 +29,7 @@ import (
 	"github.com/z5labs/humus/telemetry"
 
 	"github.com/Zaba505/markov-to-llm/app"
+	"github.com/Zaba505/markov-to-llm/markov"
 )
 
 var update = flag.Bool("update", false, "rewrite the golden files")
@@ -161,6 +162,7 @@ func TestInit_serves_the_page_and_its_assets(t *testing.T) {
 		require.Contains(t, page.body, `id="notice"`)
 		require.NotContains(t, page.body, `class="run"`)
 		require.Contains(t, page.body, `"target":"#notice"`, "errors must not overwrite what is on the page")
+		require.Contains(t, page.body, `hx-post="/runs"`)
 
 		for path, want := range map[string]string{
 			"/static/htmx.min.js": "javascript",
@@ -189,6 +191,11 @@ func TestInit_takes_a_corpus_through_every_step(t *testing.T) {
 		require.Contains(t, fragment, "<svg")
 		require.Contains(t, fragment, `<button type="submit" disabled>`, "nothing can be generated before a token is selected")
 		require.NotContains(t, fragment, "hx-swap-oob", "the first selection is in place, not out of band")
+		require.Contains(t, fragment, `hx-post="/runs/`+id+`/sentences"`)
+		require.Contains(t, fragment, `hx-get="/runs/`+id+`/tokens"`)
+		require.Contains(t, fragment, `maxlength="64"`)
+		require.Contains(t, fragment, "with up to 5 arrows")
+		require.Contains(t, fragment, `/runs/`+id+`/chain?token=one`)
 
 		chain := s.get("/runs/" + id + "/chain?token=one")
 		require.Equal(t, http.StatusOK, chain.status, chain.body)
@@ -274,7 +281,143 @@ func TestInit_makes_tokens_that_need_escaping_selectable(t *testing.T) {
 
 		r := s.get("/runs/" + id + "/chain?token=%2C")
 		require.Equal(t, http.StatusOK, r.status, r.body)
-		require.Contains(t, r.body, `name="token" value=","`)
+		require.Contains(t, r.body, "After <code>,</code>", "a comma's odds are worth seeing")
+		require.Contains(t, r.body, `name="token" value=""`, "but a sentence can't start from it")
+		require.Contains(t, r.body, `<button type="submit" disabled>`)
+		require.Contains(t, r.body, "<code>,</code> can't start a sentence")
+
+		s.stop()
+	})
+}
+
+func TestInit_offers_only_words_as_starting_tokens(t *testing.T) {
+	synctest.Test(t, func(t *testing.T) {
+		s := start(t)
+		id, fragment := s.newRun("One, two, three, four, five.")
+		require.NotContains(t, fragment, `class="chip" hx-get="/runs/`+id+`/chain?token=%2C"`)
+		require.Contains(t, fragment, ">one</button>")
+
+		tokens := s.get("/runs/" + id + "/tokens?q=%2C")
+		require.Equal(t, http.StatusOK, tokens.status, tokens.body)
+		require.Contains(t, tokens.body, "No tokens start like that")
+
+		s.stop()
+	})
+}
+
+func TestInit_makes_long_tokens_selectable_or_drops_them(t *testing.T) {
+	synctest.Test(t, func(t *testing.T) {
+		s := start(t)
+		// The longest token there can be, with every rune as long as a rune gets.
+		longest := strings.Repeat("𝐱", markov.MaxTokenRunes)
+		tooLong := strings.Repeat("y", markov.MaxTokenRunes+1)
+
+		id, fragment := s.newRun("Short " + longest + " " + tooLong + " words.")
+		require.Contains(t, fragment, "<dd>4</dd>", "the too-long word isn't a token, so only short, the longest, words and .")
+		require.NotContains(t, fragment, "token="+tooLong)
+		require.Contains(t, fragment, "token="+url.QueryEscape(longest))
+
+		r := s.get("/runs/" + id + "/chain?" + url.Values{"token": {longest}}.Encode())
+		require.Equal(t, http.StatusOK, r.status, r.body)
+		require.Contains(t, r.body, "has-selection")
+
+		rejected := s.get("/runs/" + id + "/chain?token=" + tooLong)
+		require.Equal(t, http.StatusBadRequest, rejected.status, rejected.body)
+
+		s.stop()
+	})
+}
+
+func TestInit_finds_a_token_typed_with_a_curly_apostrophe(t *testing.T) {
+	synctest.Test(t, func(t *testing.T) {
+		s := start(t)
+		id, _ := s.newRun("Don’t stop.")
+
+		r := s.get("/runs/" + id + "/tokens?" + url.Values{"q": {"don’"}}.Encode())
+		require.Equal(t, http.StatusOK, r.status, r.body)
+		require.Contains(t, r.body, ">don&#39;t</button>")
+
+		s.stop()
+	})
+}
+
+func TestInit_shows_near_certainty_as_less_than_certain(t *testing.T) {
+	synctest.Test(t, func(t *testing.T) {
+		s := start(t)
+		id, _ := s.newRun(strings.Repeat("Hub likely.\n", 996) + strings.Repeat("Hub rare.\n", 4))
+
+		r := s.get("/runs/" + id + "/chain?token=hub")
+		require.Equal(t, http.StatusOK, r.status, r.body)
+		require.Contains(t, r.body, `<td class="pct">&gt;99%</td>`)
+		require.Contains(t, r.body, `<td class="pct">&lt;1%</td>`)
+		require.NotContains(t, r.body, ">100%<")
+
+		s.stop()
+	})
+}
+
+func TestInit_rejects_forms_from_other_sites(t *testing.T) {
+	synctest.Test(t, func(t *testing.T) {
+		s := start(t)
+		id, _ := s.newRun(onePath)
+
+		send := func(header, value string) response {
+			req, err := http.NewRequest(http.MethodPost, base+"/runs/"+id+"/sentences", strings.NewReader("token=one"))
+			require.NoError(t, err)
+			req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+			req.Header.Set(header, value)
+			return s.do(req)
+		}
+
+		for header, value := range map[string]string{"Sec-Fetch-Site": "cross-site", "Origin": "https://evil.example"} {
+			r := send(header, value)
+			require.Equal(t, http.StatusForbidden, r.status, "%s: %s", header, r.body)
+			require.Equal(t, "text/html; charset=utf-8", r.contentType)
+			require.True(t, strings.HasPrefix(r.body, "<p><strong>"), "%q isn't a notice", r.body)
+		}
+
+		for header, value := range map[string]string{"Sec-Fetch-Site": "same-origin", "Origin": base} {
+			r := send(header, value)
+			require.Equal(t, http.StatusOK, r.status, "%s: %s", header, r.body)
+		}
+
+		s.stop()
+	})
+}
+
+func TestInit_lets_the_keyboard_activate_graph_nodes(t *testing.T) {
+	synctest.Test(t, func(t *testing.T) {
+		s := start(t)
+		_, fragment := s.newRun(onePath)
+
+		require.Contains(t, fragment, `role="button"`)
+		require.Contains(t, fragment, `key=='Enter'`)
+		require.Contains(t, fragment, `key==' '`, "a button responds to Space too")
+		require.Contains(t, fragment, `hx-on:keydown="if (event.key === ' ') event.preventDefault()"`, "Space must not scroll the page")
+
+		s.stop()
+	})
+}
+
+func TestInit_counts_in_the_singular(t *testing.T) {
+	synctest.Test(t, func(t *testing.T) {
+		s := start(t)
+		var b strings.Builder
+		for i := range 13 {
+			b.WriteString("Hub word" + string(rune('a'+i)) + ".\n")
+		}
+		id, fragment := s.newRun(b.String())
+		require.Contains(t, fragment, "appears 1 time")
+		require.Contains(t, fragment, `title="Appears 1 time"`)
+		require.NotContains(t, fragment, "1 times")
+
+		r := s.get("/runs/" + id + "/chain?token=hub")
+		require.Equal(t, http.StatusOK, r.status, r.body)
+		require.Contains(t, r.body, "Appears 13 times.")
+		require.Contains(t, r.body, "and 1 less likely token.")
+
+		one := s.get("/runs/" + id + "/chain?token=worda")
+		require.Contains(t, one.body, "Appears 1 time.")
 
 		s.stop()
 	})
@@ -344,7 +487,7 @@ func TestInit_answers_every_failure_with_a_notice(t *testing.T) {
 				name:   "selecting a terminator",
 				do:     func() response { return s.get("/runs/" + id + "/chain?token=.") },
 				status: http.StatusUnprocessableEntity,
-				want:   "can&#39;t start a sentence",
+				want:   "can&#39;t be selected",
 			},
 			{
 				name: "generating from a token not in the corpus",
@@ -358,6 +501,14 @@ func TestInit_answers_every_failure_with_a_notice(t *testing.T) {
 				name: "generating from a terminator",
 				do: func() response {
 					return s.postForm("/runs/"+id+"/sentences", url.Values{"token": {"."}})
+				},
+				status: http.StatusUnprocessableEntity,
+				want:   "can&#39;t start a sentence",
+			},
+			{
+				name: "generating from a clause mark",
+				do: func() response {
+					return s.postForm("/runs/"+id+"/sentences", url.Values{"token": {","}})
 				},
 				status: http.StatusUnprocessableEntity,
 				want:   "can&#39;t start a sentence",
