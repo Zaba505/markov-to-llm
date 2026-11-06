@@ -1,0 +1,40 @@
+{{define "page"}}<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Markov Chain Explorer</title>
+<meta name="htmx-config" content='{"responseHandling":[{"code":"204","swap":false},{"code":"[23]..","swap":true},{"code":"[45]..","swap":true,"error":true,"target":"#notice","swapOverride":"innerHTML"},{"code":"...","swap":false}]}'>
+<link rel="icon" href="data:,">
+<link rel="stylesheet" href="/static/app.css">
+<script src="/static/htmx.min.js"></script>
+</head>
+<body hx-on::before-request="document.getElementById('notice').replaceChildren()"
+      hx-on::send-error="document.getElementById('notice').textContent = 'Can\'t reach the server. Is it still running?'">
+<main>
+  <header class="intro">
+    <h1>From Markov chains to LLMs</h1>
+    <p>Upload some text, see which tokens tend to follow which, and watch a sentence get built one prediction at a time. An LLM repeats the same loop of predicting the next token from a probability distribution, using far more context than the single token used here.</p>
+    <p class="hint">This page is your history. Every step stays here as you go, and refreshing clears it.</p>
+  </header>
+  {{template "upload" .}}
+</main>
+<div id="notice" role="alert"></div>
+</body>
+</html>
+{{end}}
+
+{{define "upload"}}<form id="upload" class="step upload"
+      hx-post="/runs" hx-encoding="multipart/form-data"
+      hx-target="this" hx-swap="beforebegin show:article.run:last-of-type:top"
+      hx-disabled-elt="find button"
+      hx-on::after-request="if (event.detail.successful) this.reset()">
+  <h2>Upload a corpus</h2>
+  <p>A plain text file in UTF-8, up to {{.MaxUploadMB}} MB. The more text, the more interesting the chain.</p>
+  <div class="row">
+    <input type="file" name="corpus" accept=".txt,.md,text/plain" required aria-label="Corpus file">
+    <button type="submit"><span class="idle">Build the chain</span><span class="busy">Building…</span></button>
+  </div>
+</form>{{end}}
+
+{{define "notice"}}<p><strong>{{.Title}}</strong>{{if .Detail}}: {{.Detail}}{{end}}</p>{{end}}
