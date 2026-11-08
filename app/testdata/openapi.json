@@ -1,0 +1,293 @@
+{
+  "openapi": "3.2.0",
+  "info": {
+    "title": "Markov chain explorer",
+    "version": "0.1.0"
+  },
+  "paths": {
+    "/": {
+      "get": {
+        "summary": "The page, with nothing uploaded yet",
+        "operationId": "getPage",
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": {
+              "text/html; charset=utf-8": {}
+            }
+          },
+          "500": {
+            "description": "Internal Server Error",
+            "content": {
+              "text/html; charset=utf-8": {}
+            }
+          }
+        }
+      }
+    },
+    "/runs": {
+      "post": {
+        "summary": "Build a chain from a corpus",
+        "operationId": "createRun",
+        "requestBody": {
+          "content": {
+            "multipart/form-data": {
+              "schema": {
+                "type": "object",
+                "required": [
+                  "corpus"
+                ],
+                "properties": {
+                  "corpus": {
+                    "type": "string",
+                    "format": "binary",
+                    "description": "The UTF-8 text to build a chain from."
+                  }
+                }
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "201": {
+            "description": "Created",
+            "content": {
+              "text/html; charset=utf-8": {}
+            }
+          },
+          "400": {
+            "description": "Bad Request",
+            "content": {
+              "text/html; charset=utf-8": {}
+            }
+          },
+          "413": {
+            "description": "Request Entity Too Large",
+            "content": {
+              "text/html; charset=utf-8": {}
+            }
+          },
+          "415": {
+            "description": "Unsupported Media Type",
+            "content": {
+              "text/html; charset=utf-8": {}
+            }
+          },
+          "422": {
+            "description": "Unprocessable Entity",
+            "content": {
+              "text/html; charset=utf-8": {}
+            }
+          },
+          "500": {
+            "description": "Internal Server Error",
+            "content": {
+              "text/html; charset=utf-8": {}
+            }
+          }
+        }
+      }
+    },
+    "/runs/{runId}/chain": {
+      "get": {
+        "summary": "Draw a run's chain, with a token selected",
+        "operationId": "getChain",
+        "parameters": [
+          {
+            "name": "runId",
+            "in": "path",
+            "description": "The run, as the page was given it when its corpus was uploaded.",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "pattern": "^[0-9a-f]{16}$"
+            }
+          },
+          {
+            "name": "limit",
+            "in": "query",
+            "description": "How many of the most frequent tokens to draw.",
+            "schema": {
+              "type": "integer",
+              "default": 30,
+              "minimum": 10,
+              "maximum": 100
+            }
+          },
+          {
+            "name": "token",
+            "in": "query",
+            "description": "The token to select. A corpus's token, or empty for none.",
+            "schema": {
+              "type": "string",
+              "maxLength": 256
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": {
+              "text/html; charset=utf-8": {}
+            }
+          },
+          "400": {
+            "description": "Bad Request",
+            "content": {
+              "text/html; charset=utf-8": {}
+            }
+          },
+          "404": {
+            "description": "Not Found",
+            "content": {
+              "text/html; charset=utf-8": {}
+            }
+          },
+          "422": {
+            "description": "Unprocessable Entity",
+            "content": {
+              "text/html; charset=utf-8": {}
+            }
+          },
+          "500": {
+            "description": "Internal Server Error",
+            "content": {
+              "text/html; charset=utf-8": {}
+            }
+          }
+        }
+      }
+    },
+    "/runs/{runId}/sentences": {
+      "post": {
+        "summary": "Generate a sentence from a starting token",
+        "operationId": "createSentence",
+        "parameters": [
+          {
+            "name": "runId",
+            "in": "path",
+            "description": "The run, as the page was given it when its corpus was uploaded.",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "pattern": "^[0-9a-f]{16}$"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/x-www-form-urlencoded": {
+              "schema": {
+                "properties": {
+                  "token": {
+                    "type": "string"
+                  }
+                },
+                "type": "object"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": {
+              "text/html; charset=utf-8": {}
+            }
+          },
+          "400": {
+            "description": "Bad Request",
+            "content": {
+              "text/html; charset=utf-8": {}
+            }
+          },
+          "404": {
+            "description": "Not Found",
+            "content": {
+              "text/html; charset=utf-8": {}
+            }
+          },
+          "413": {
+            "description": "Request Entity Too Large",
+            "content": {
+              "text/html; charset=utf-8": {}
+            }
+          },
+          "415": {
+            "description": "Unsupported Media Type",
+            "content": {
+              "text/html; charset=utf-8": {}
+            }
+          },
+          "422": {
+            "description": "Unprocessable Entity",
+            "content": {
+              "text/html; charset=utf-8": {}
+            }
+          },
+          "500": {
+            "description": "Internal Server Error",
+            "content": {
+              "text/html; charset=utf-8": {}
+            }
+          }
+        }
+      }
+    },
+    "/runs/{runId}/tokens": {
+      "get": {
+        "summary": "Find the tokens that can start a sentence",
+        "operationId": "searchTokens",
+        "parameters": [
+          {
+            "name": "runId",
+            "in": "path",
+            "description": "The run, as the page was given it when its corpus was uploaded.",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "pattern": "^[0-9a-f]{16}$"
+            }
+          },
+          {
+            "name": "q",
+            "in": "query",
+            "description": "The start of the tokens to find.",
+            "schema": {
+              "type": "string",
+              "maxLength": 64
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": {
+              "text/html; charset=utf-8": {}
+            }
+          },
+          "400": {
+            "description": "Bad Request",
+            "content": {
+              "text/html; charset=utf-8": {}
+            }
+          },
+          "404": {
+            "description": "Not Found",
+            "content": {
+              "text/html; charset=utf-8": {}
+            }
+          },
+          "500": {
+            "description": "Internal Server Error",
+            "content": {
+              "text/html; charset=utf-8": {}
+            }
+          }
+        }
+      }
+    }
+  }
+}

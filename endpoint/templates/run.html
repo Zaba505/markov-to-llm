@@ -1,0 +1,89 @@
+{{define "run"}}<article class="run" id="run-{{.ID}}">
+  <section class="step">
+    <h2><span class="number">1</span> Corpus</h2>
+    <p class="file">{{if .Name}}{{.Name}}{{else}}Uploaded text{{end}}</p>
+    <dl class="stats">
+      <div><dt>Tokens</dt><dd>{{.Tokens}}</dd></div>
+      <div><dt>Distinct tokens</dt><dd>{{.Vocabulary}}</dd></div>
+      <div><dt>Sentences</dt><dd>{{.Sentences}}</dd></div>
+    </dl>
+    <details>
+      <summary>Show the text</summary>
+      <blockquote>{{.Preview}}{{if .PreviewIsPart}}…{{end}}</blockquote>
+    </details>
+  </section>
+
+  <section class="step">
+    <h2><span class="number">2</span> Chain</h2>
+    <p>Each circle is a token, sized by how often it appears. Each arrow shows a token that can come next, thicker when it's more likely. Select a token to see what can follow it.</p>
+    {{template "chain" .Chain}}
+  </section>
+
+  <section class="step">
+    <h2><span class="number">3</span> Generate</h2>
+    <p>Each next token is sampled from the distribution of what followed the current token in your corpus. The chain only remembers one token, so sentences wander. LLMs improve on this by conditioning on the whole context.</p>
+    <form class="generate" hx-post="{{.SentencesURL}}" hx-target="#sentences-{{.ID}}" hx-swap="beforeend show:#sentences-{{.ID}}:bottom">
+      {{template "selection" .Selection}}
+    </form>
+    <label class="search">Find a starting token
+      <input type="search" name="q" maxlength="{{.MaxQuery}}" autocomplete="off" placeholder="Start typing a word"
+             hx-get="{{.TokensURL}}" hx-trigger="input changed delay:150ms, search"
+             hx-target="#chips-{{.ID}}">
+    </label>
+    <div class="chips" id="chips-{{.ID}}">{{template "chips" .Chips}}</div>
+    <ol class="sentences" id="sentences-{{.ID}}" aria-live="polite"></ol>
+  </section>
+</article>{{end}}
+
+{{define "chainResponse"}}{{template "chain" .}}{{template "selection" .Selection}}{{end}}
+
+{{define "chain"}}<div class="chain" id="chain-{{.RunID}}">
+  {{if .ShowLimit}}<label class="limit">Show the most frequent tokens
+    <input type="range" id="limit-{{.RunID}}" name="limit" min="{{.MinLimit}}" max="{{.MaxLimit}}" step="{{.LimitStep}}" value="{{.Limit}}"
+           hx-get="{{.SliderURL}}" hx-trigger="change" hx-target="#chain-{{.RunID}}" hx-swap="outerHTML"
+           hx-on:input="this.nextElementSibling.value = this.value">
+    <output>{{.Limit}}</output>
+  </label>{{end}}
+  <div class="chain-body">
+    <figure>
+      <svg class="graph{{if .Selected}} has-selection{{end}}" viewBox="0 0 {{coord .Width}} {{coord .Height}}" role="group" aria-label="Markov chain graph">
+        <defs>
+          <marker id="arrow-{{.RunID}}" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" markerUnits="userSpaceOnUse" orient="auto"><path class="arrow" d="M0 0L10 5L0 10z"/></marker>
+          <marker id="arrow-on-{{.RunID}}" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="11" markerHeight="11" markerUnits="userSpaceOnUse" orient="auto"><path class="arrow on" d="M0 0L10 5L0 10z"/></marker>
+        </defs>
+        <g class="edges">{{range .Edges}}<path class="edge{{if .Highlighted}} on{{end}}" d="{{.Path}}" stroke-width="{{coord .Width}}" stroke-opacity="{{coord .Opacity}}" marker-end="url(#arrow{{if .Highlighted}}-on{{end}}-{{$.RunID}})"><title>{{.From}} → {{.To}}: {{percent .Probability}}</title></path>{{end}}</g>
+        <g class="nodes">{{range .Nodes}}<g class="node{{if .Terminal}} terminal{{end}}{{if .Selected}} selected{{end}}{{if .Highlighted}} on{{end}}" id="node-{{$.RunID}}-{{.ID}}"{{if .URL}} role="button" tabindex="0" hx-get="{{.URL}}" hx-include="#limit-{{$.RunID}}" hx-trigger="click, keyup[key=='Enter'||key==' ']" hx-on:keydown="if (event.key === ' ') event.preventDefault()" hx-target="#chain-{{$.RunID}}" hx-swap="outerHTML"{{end}} transform="translate({{coord .X}} {{coord .Y}})"><title>{{.Token}}: appears {{count .Count "time"}}{{if .Terminal}}, and ends a sentence{{end}}</title><circle r="{{coord .R}}"/><text dy="0.35em">{{.Label}}</text></g>{{end}}</g>
+        <g class="edge-labels">{{range .Edges}}{{if .Highlighted}}<text x="{{coord .LabelX}}" y="{{coord .LabelY}}" dy="0.35em">{{percent .Probability}}</text>{{end}}{{end}}</g>
+      </svg>
+      <figcaption>Showing {{.Shown}} of {{count .Vocabulary "distinct token"}}, with up to {{.MaxEdges}} arrows out of each.</figcaption>
+    </figure>
+    <aside class="panel">
+      {{if .Selected}}<h3>After <code>{{.Selected}}</code></h3>
+      <p class="hint">Appears {{count .SelectedCount "time"}}. These are the odds for the next token.</p>
+      <table class="next"><tbody>{{range .Next}}
+        <tr><td class="token">{{if .URL}}<button type="button" class="link" hx-get="{{.URL}}" hx-include="#limit-{{$.RunID}}" hx-target="#chain-{{$.RunID}}" hx-swap="outerHTML">{{.Token}}</button>{{else}}{{.Token}}{{end}}</td><td class="bar-cell"><span class="bar" style="width: {{.Width}}%"></span></td><td class="pct">{{.Percent}}</td></tr>{{end}}
+      </tbody></table>
+      {{if .MoreNext}}<p class="hint">and {{count .MoreNext "less likely token"}}.</p>{{end}}
+      {{else}}<h3>Next-token odds</h3>
+      <p class="hint">Click a token in the graph to see what can follow it. This is the distribution a sentence samples from at each step.</p>{{end}}
+    </aside>
+  </div>
+</div>{{end}}
+
+{{define "selection"}}<div class="selection" id="selection-{{.RunID}}"{{if .OOB}} hx-swap-oob="true"{{end}}>
+  <input type="hidden" name="token" value="{{.Token}}">
+  <span>Starting token: {{if .Token}}<code>{{.Token}}</code>{{else if .Unusable}}<em><code>{{.Unusable}}</code> can't start a sentence, so click a word in the graph or below</em>{{else}}<em>none yet, so click one in the graph or below</em>{{end}}</span>
+  <button type="submit"{{if not .Token}} disabled{{end}}>Generate a sentence</button>
+</div>{{end}}
+
+{{define "chips"}}{{range .Chips}}<button type="button" class="chip" hx-get="{{.URL}}" hx-include="#limit-{{$.RunID}}" hx-target="#chain-{{$.RunID}}" hx-swap="outerHTML" title="Appears {{count .Count "time"}}">{{.Token}}</button>{{else}}<p class="hint">No tokens start like that.</p>{{end}}{{end}}
+
+{{define "sentence"}}<li class="sentence">
+  <p class="text">{{.Text}}{{if .Truncated}} <span class="hint">(stopped at {{.MaxTokens}} tokens)</span>{{end}}</p>
+  <details>
+    <summary>See each prediction, starting from <code>{{.Start}}</code></summary>
+    <ol class="trace">{{range .Steps}}
+      <li><code>{{.From}}</code> <span aria-hidden="true">→</span> {{range .Candidates}}<span class="candidate{{if .Chosen}} chosen{{end}}">{{.Token}} <small>{{.Percent}}</small></span> {{end}}{{if .Others}}<span class="hint">+{{.Others}} more</span>{{end}}</li>{{end}}
+    </ol>
+  </details>
+</li>{{end}}
